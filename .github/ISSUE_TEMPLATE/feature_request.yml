@@ -1,0 +1,59 @@
+name: Feature request
+description: Suggest a toolchain to support, a doctor or check finding, or a CLI feature.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Changes to generated build files need a link to the public toolchain
+        documentation they rely on. See
+        [CONTRIBUTING.md](https://github.com/saimskywalker/husk_sdk/blob/main/CONTRIBUTING.md).
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - iOS (SwiftPM or CocoaPods)
+        - Android (Gradle)
+        - Dart API
+        - CLI (doctor, check, link)
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What you are trying to build, and what gets in the way.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: Links to the public Apple, Google, Gradle or Flutter documentation, or a public issue, that the change relies on.
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behaviour
+  - type: dropdown
+    id: ai-use
+    attributes:
+      label: Did you use an AI tool to write this issue?
+      options:
+        - "No"
+        - "Yes, for parts"
+        - "Yes, mostly"
+    validations:
+      required: true
+  - type: input
+    id: ai-tool
+    attributes:
+      label: If yes, which tool and model?
+      description: Required if you answered yes above, for example "Claude Code, Opus 5.5" or "Copilot, GPT-5".
+  - type: checkboxes
+    id: own-words
+    attributes:
+      label: Your own words
+      options:
+        - label: I wrote this issue in my own words.
+          required: true

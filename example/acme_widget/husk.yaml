@@ -1,0 +1,34 @@
+# husk.yaml: how husk_sdk wires the closed-source AcmeWidgetSDK into
+# this project. Paths are relative to this file. Commented-out
+# values show the defaults. Docs: https://pub.dev/packages/husk_sdk
+sdk:
+  name: AcmeWidgetSDK
+  version: 3.2.0
+
+# plugin: acme_widget
+# shim: AcmeWidgetSDKHusk
+# channel: acme_widget/husk
+
+# Where `link` (and the Gradle build) look for the vendor files.
+# binary:
+#   env: ACME_WIDGET_SDK_DIR
+#   gradle_property: acmeWidgetSdkDir
+
+ios:
+  # xcframework: AcmeWidgetSDK.xcframework
+  # package_dir: ios/acme_widget
+  # podspec: ios/acme_widget.podspec
+  # target: acme_widget
+
+android:
+  aar: 'acme-widget-*.aar'
+  # Or, for a private Maven repository instead of a file:
+  # maven:
+  #   coordinates: com.example:sdk:1.2.3
+  # module_dir: android
+  # package: com.example.acme_widget
+  # source_dir: src/main/kotlin
+
+# dart:
+#   output: lib/src/acme_widget_sdk_husk.g.dart
+#   class: AcmeWidgetSdkHusk

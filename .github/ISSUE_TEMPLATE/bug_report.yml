@@ -1,0 +1,102 @@
+name: Bug report
+description: A build that links the wrong thing, a wrong doctor/check result, or the CLI misbehaving.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please use invented SDK, plugin and package names in anything you
+        paste, and never attach a vendor binary. Security problems go through
+        the Security tab, not here.
+  - type: input
+    id: version
+    attributes:
+      label: Package version
+      placeholder: "0.1.0"
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Output of `flutter --version`, Xcode and Android Gradle Plugin versions, and the host OS.
+      render: text
+    validations:
+      required: true
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Kind of problem
+      options:
+        - Build fails with the SDK present
+        - Build fails without the SDK (stub build)
+        - Links the stub although the SDK is present (or the other way round)
+        - Wrong doctor or check result
+        - Crash or wrong output from the CLI
+        - Something else
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - iOS (SwiftPM)
+        - iOS (CocoaPods)
+        - Android
+        - Not platform specific
+    validations:
+      required: true
+  - type: textarea
+    id: command
+    attributes:
+      label: Command you ran
+      render: shell
+      placeholder: dart run husk_sdk check
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Minimal reproduction
+      description: Your husk.yaml and the smallest Package.swift, podspec or Gradle snippet that shows it (no vendor binaries).
+      render: yaml
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected result
+      description: What you expected to be linked or reported, and why.
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual result
+      description: What the tool or the build printed, including the exit code.
+      render: text
+    validations:
+      required: true
+  - type: dropdown
+    id: ai-use
+    attributes:
+      label: Did you use an AI tool to write this issue?
+      options:
+        - "No"
+        - "Yes, for parts"
+        - "Yes, mostly"
+    validations:
+      required: true
+  - type: input
+    id: ai-tool
+    attributes:
+      label: If yes, which tool and model?
+      description: Required if you answered yes above, for example "Claude Code, Opus 5.5" or "Copilot, GPT-5".
+  - type: checkboxes
+    id: own-words
+    attributes:
+      label: Your own words
+      options:
+        - label: I wrote this issue in my own words.
+          required: true

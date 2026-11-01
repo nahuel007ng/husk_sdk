@@ -1,0 +1,16 @@
+.dart_tool/
+.packages
+/build/
+# The package's own lock file. The example projects keep theirs out too.
+/pubspec.lock
+.idea/
+*.iml
+.DS_Store
+/doc/api/
+# The fake vendor SDK is built by example/fake_vendor_sdk/build.sh; never
+# commit binaries, fake or real.
+/example/fake_vendor_sdk/dist/
+/example/fake_vendor_sdk/.work/
+*.xcframework
+*.aar
+/example/**/pubspec.lock

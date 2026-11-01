@@ -1,0 +1,495 @@
+import 'dart:io';
+
+import 'package:path/path.dart' as p;
+import 'package:yaml/yaml.dart';
+
+import 'names.dart';
+import 'paths.dart';
+
+/// Default spec file name, looked up in the project directory.
+const String specFileName = 'husk.yaml';
+
+/// Thrown when `husk.yaml` is missing, malformed or inconsistent.
+class SpecException implements Exception {
+  /// Creates an exception with a message that names the offending key.
+  SpecException(this.message);
+
+  /// Human readable description, prefixed with the key path when known.
+  final String message;
+
+  @override
+  String toString() => message;
+}
+
+/// The parsed and validated contents of `husk.yaml`.
+///
+/// Every path is stored in POSIX form relative to [root]; use [resolve] to
+/// turn one into a native absolute path.
+class HuskSpec {
+  /// Creates a spec. Use [HuskSpec.load] or [HuskSpec.parse] instead.
+  HuskSpec({
+    required this.root,
+    required this.sdkName,
+    required this.version,
+    required this.plugin,
+    required this.shim,
+    required this.channel,
+    required this.envVar,
+    required this.gradleProperty,
+    required this.ios,
+    required this.android,
+    required this.dart,
+  });
+
+  /// Reads and validates `husk.yaml` from [projectDir].
+  factory HuskSpec.load(String projectDir, {String? specPath}) {
+    final file = File(specPath ?? p.join(projectDir, specFileName));
+    if (!file.existsSync()) {
+      throw SpecException(
+        'No ${p.basename(file.path)} in ${p.normalize(p.absolute(projectDir))}. '
+        'Run `dart run husk_sdk init --sdk <Name>` to create one.',
+      );
+    }
+    return HuskSpec.parse(
+      file.readAsStringSync(),
+      root: p.normalize(p.absolute(projectDir)),
+      sourceName: file.path,
+    );
+  }
+
+  /// Parses [yamlText] as a spec for the project at [root].
+  ///
+  /// Defaults that depend on the project (plugin name, Kotlin package) are
+  /// read from `pubspec.yaml` and the Gradle build file under [root].
+  factory HuskSpec.parse(
+    String yamlText, {
+    required String root,
+    String sourceName = specFileName,
+  }) {
+    final Object? doc;
+    try {
+      doc = loadYaml(yamlText, sourceUrl: Uri.file(sourceName));
+    } on YamlException catch (e) {
+      throw SpecException(
+        '$specFileName: ${e.message} (${e.span?.start.line})',
+      );
+    }
+    final top = _Node(doc, specFileName).map(const {
+      'sdk',
+      'plugin',
+      'shim',
+      'channel',
+      'binary',
+      'ios',
+      'android',
+      'dart',
+    });
+
+    final sdk = top.child('sdk').map(const {'name', 'version'});
+    final sdkName = sdk.child('name').requiredString(identifier);
+    final version = sdk.child('version').optionalString(versionPattern);
+    final words = splitWords(sdkName);
+
+    final plugin =
+        top.child('plugin').optionalString(dartPackageName) ??
+        _pubspecName(root) ??
+        (throw SpecException(
+          '$specFileName: plugin: not set and no pubspec.yaml name to default to',
+        ));
+    final shim =
+        top.child('shim').optionalString(identifier) ?? '${sdkName}Husk';
+    final channel =
+        top.child('channel').optionalString(channelPattern) ?? '$plugin/husk';
+
+    final binary = top.child('binary').mapOrEmpty(const {
+      'env',
+      'gradle_property',
+    });
+    final envVar =
+        binary.child('env').optionalString(identifier) ??
+        '${screamingSnake(words)}_DIR';
+    final gradleProperty =
+        binary.child('gradle_property').optionalString(gradlePropertyPattern) ??
+        '${lowerCamel(words)}Dir';
+
+    IosSpec? ios;
+    final iosNode = top.child('ios');
+    if (iosNode.isPresent) {
+      final n = iosNode.mapOrEmpty(const {
+        'xcframework',
+        'package_dir',
+        'podspec',
+        'target',
+      });
+      final packageDir = n.child('package_dir').optionalPath() ?? 'ios/$plugin';
+      final String? podspec;
+      if (n.child('podspec').isExplicitNull ||
+          n.child('podspec').value == false) {
+        podspec = null;
+      } else {
+        podspec =
+            n.child('podspec').optionalPath() ??
+            (File(p.join(root, 'ios', '$plugin.podspec')).existsSync()
+                ? 'ios/$plugin.podspec'
+                : null);
+      }
+      ios = IosSpec(
+        xcframework:
+            n.child('xcframework').optionalString(xcframeworkName) ??
+            '$sdkName.xcframework',
+        packageDir: packageDir,
+        podspec: podspec,
+        target: n.child('target').optionalString(identifier) ?? plugin,
+      );
+    }
+
+    AndroidSpec? android;
+    final androidNode = top.child('android');
+    if (androidNode.isPresent) {
+      final n = androidNode.mapOrEmpty(const {
+        'aar',
+        'maven',
+        'module_dir',
+        'package',
+        'source_dir',
+      });
+      final moduleDir = n.child('module_dir').optionalPath() ?? 'android';
+      MavenSpec? maven;
+      final mavenNode = n.child('maven');
+      if (mavenNode.isPresent) {
+        final m = mavenNode.map(const {
+          'coordinates',
+          'url_property',
+          'url_env',
+          'username_property',
+          'password_property',
+        });
+        maven = MavenSpec(
+          coordinates: m.child('coordinates').requiredString(mavenCoordinates),
+          urlProperty:
+              m.child('url_property').optionalString(gradlePropertyPattern) ??
+              '${lowerCamel(words)}MavenUrl',
+          urlEnv:
+              m.child('url_env').optionalString(identifier) ??
+              '${screamingSnake(words)}_MAVEN_URL',
+          usernameProperty: m
+              .child('username_property')
+              .optionalString(gradlePropertyPattern),
+          passwordProperty: m
+              .child('password_property')
+              .optionalString(gradlePropertyPattern),
+        );
+        if (n.child('aar').isPresent) {
+          throw SpecException(
+            '$specFileName: android: set either aar or maven, not both',
+          );
+        }
+      }
+      final kotlinPackage =
+          n.child('package').optionalString(kotlinPackagePattern) ??
+          _gradleNamespace(p.join(root, p.joinAll(p.posix.split(moduleDir)))) ??
+          (throw SpecException(
+            '$specFileName: android.package: not set and no `namespace` '
+            'found in $moduleDir/build.gradle(.kts)',
+          ));
+      android = AndroidSpec(
+        aar: maven == null
+            ? n.child('aar').optionalString(aarGlob) ?? '*.aar'
+            : null,
+        maven: maven,
+        moduleDir: moduleDir,
+        kotlinPackage: kotlinPackage,
+        sourceDir: n.child('source_dir').optionalPath() ?? 'src/main/kotlin',
+      );
+    }
+
+    if (ios == null && android == null) {
+      throw SpecException(
+        '$specFileName: configure at least one of `ios:` or `android:`',
+      );
+    }
+
+    final dartNode = top.child('dart').mapOrEmpty(const {'output', 'class'});
+    final dart = DartSpec(
+      output:
+          dartNode.child('output').optionalPath() ??
+          'lib/src/${snake(words)}_husk.g.dart',
+      className:
+          dartNode.child('class').optionalString(identifier) ??
+          '${upperCamel(words)}Husk',
+    );
+    if (!dart.output.endsWith('.dart')) {
+      throw SpecException('$specFileName: dart.output: must end in .dart');
+    }
+
+    return HuskSpec(
+      root: root,
+      sdkName: sdkName,
+      version: version,
+      plugin: plugin,
+      shim: shim,
+      channel: channel,
+      envVar: envVar,
+      gradleProperty: gradleProperty,
+      ios: ios,
+      android: android,
+      dart: dart,
+    );
+  }
+
+  /// Absolute, normalized project directory (where `husk.yaml` lives).
+  final String root;
+
+  /// Swift module name of the vendor SDK, for example `AcmeWidgetSDK`.
+  final String sdkName;
+
+  /// Vendor SDK version the project expects, if pinned.
+  final String? version;
+
+  /// Name of the Flutter plugin (pubspec name).
+  final String plugin;
+
+  /// Name of the generated shim type and SwiftPM target.
+  final String shim;
+
+  /// Method channel the generated Dart and native code talk over.
+  final String channel;
+
+  /// Environment variable naming a directory that holds the vendor binaries.
+  final String envVar;
+
+  /// Gradle property naming a directory that holds the vendor AAR.
+  final String gradleProperty;
+
+  /// iOS settings, or null when iOS is not configured.
+  final IosSpec? ios;
+
+  /// Android settings, or null when Android is not configured.
+  final AndroidSpec? android;
+
+  /// Generated Dart API settings.
+  final DartSpec dart;
+
+  /// Compilation condition defined when the vendor SDK is linked.
+  String get defineName => 'HUSK_${sdkName.toUpperCase()}';
+
+  /// Native absolute path for a POSIX path relative to [root].
+  String resolve(String posixRelative) =>
+      p.normalize(p.join(root, p.joinAll(p.posix.split(posixRelative))));
+}
+
+/// iOS part of the spec.
+class IosSpec {
+  /// Creates the iOS settings.
+  IosSpec({
+    required this.xcframework,
+    required this.packageDir,
+    required this.podspec,
+    required this.target,
+  });
+
+  /// File name of the vendor xcframework, e.g. `AcmeWidgetSDK.xcframework`.
+  final String xcframework;
+
+  /// Directory holding the plugin's `Package.swift`, relative to the root.
+  final String packageDir;
+
+  /// Podspec path relative to the root, or null to skip CocoaPods.
+  final String? podspec;
+
+  /// Name of the plugin's own SwiftPM target.
+  final String target;
+
+  /// Git-ignored directory inside the package where `link` puts the binary.
+  String get dropDir => '$packageDir/$dropDirName';
+
+  /// `Package.swift` path relative to the root.
+  String get manifest => '$packageDir/Package.swift';
+}
+
+/// Android part of the spec.
+class AndroidSpec {
+  /// Creates the Android settings.
+  AndroidSpec({
+    required this.aar,
+    required this.maven,
+    required this.moduleDir,
+    required this.kotlinPackage,
+    required this.sourceDir,
+  });
+
+  /// File name or glob of the vendor AAR, when the SDK ships as a file.
+  final String? aar;
+
+  /// Maven settings, when the SDK comes from a private repository.
+  final MavenSpec? maven;
+
+  /// Gradle module directory of the plugin, relative to the root.
+  final String moduleDir;
+
+  /// Kotlin package of the generated sources.
+  final String kotlinPackage;
+
+  /// Main Kotlin source directory, relative to [moduleDir].
+  final String sourceDir;
+
+  /// Git-ignored directory inside the module where `link` puts the AAR.
+  String get dropDir => '$moduleDir/$dropDirName';
+}
+
+/// Private Maven repository settings for the Android SDK.
+class MavenSpec {
+  /// Creates the Maven settings.
+  MavenSpec({
+    required this.coordinates,
+    required this.urlProperty,
+    required this.urlEnv,
+    required this.usernameProperty,
+    required this.passwordProperty,
+  });
+
+  /// `group:artifact:version` of the vendor library.
+  final String coordinates;
+
+  /// Gradle property holding the repository URL.
+  final String urlProperty;
+
+  /// Environment variable holding the repository URL.
+  final String urlEnv;
+
+  /// Gradle property holding the repository user name, if it needs one.
+  final String? usernameProperty;
+
+  /// Gradle property holding the repository password, if it needs one.
+  final String? passwordProperty;
+}
+
+/// Generated Dart API settings.
+class DartSpec {
+  /// Creates the Dart settings.
+  DartSpec({required this.output, required this.className});
+
+  /// Output file relative to the root.
+  final String output;
+
+  /// Name of the generated class.
+  final String className;
+}
+
+String? _pubspecName(String root) {
+  final file = File(p.join(root, 'pubspec.yaml'));
+  if (!file.existsSync()) return null;
+  try {
+    final doc = loadYaml(file.readAsStringSync());
+    if (doc is YamlMap && doc['name'] is String) {
+      final name = doc['name'] as String;
+      return dartPackageName.hasMatch(name) ? name : null;
+    }
+  } on YamlException {
+    return null;
+  }
+  return null;
+}
+
+final _namespace = RegExp(
+  r'''^\s*namespace\s*(?:=\s*)?["']([A-Za-z_][\w.]*)["']''',
+  multiLine: true,
+);
+
+String? _gradleNamespace(String moduleDir) {
+  for (final name in const ['build.gradle.kts', 'build.gradle']) {
+    final file = File(p.join(moduleDir, name));
+    if (file.existsSync()) {
+      return _namespace.firstMatch(file.readAsStringSync())?.group(1);
+    }
+  }
+  return null;
+}
+
+/// A YAML value plus the key path used in error messages.
+class _Node {
+  _Node(this.value, this.path, {this.isPresent = true, this.isNull = false});
+
+  final Object? value;
+  final String path;
+  final bool isPresent;
+  final bool isNull;
+
+  bool get isExplicitNull => isPresent && isNull;
+
+  Never _fail(String message) =>
+      throw SpecException('$specFileName: $path: $message');
+
+  _Map map(Set<String> allowed) {
+    if (value is! YamlMap) {
+      _fail(isPresent ? 'expected a map' : 'missing');
+    }
+    return _Map(value as YamlMap, path == specFileName ? '' : path, allowed)
+      .._checkKeys(this);
+  }
+
+  _Map mapOrEmpty(Set<String> allowed) {
+    if (!isPresent || isNull || value == true) {
+      return _Map(YamlMap(), path, allowed);
+    }
+    return map(allowed);
+  }
+
+  String requiredString(RegExp pattern) {
+    if (!isPresent || isNull) _fail('missing');
+    return _string(pattern);
+  }
+
+  String? optionalString(RegExp pattern) {
+    if (!isPresent || isNull) return null;
+    return _string(pattern);
+  }
+
+  String _string(RegExp pattern) {
+    final v = value;
+    final s = v is String ? v : (v is num ? '$v' : null);
+    if (s == null) _fail('expected a string');
+    if (!pattern.hasMatch(s)) {
+      _fail('"$s" is not valid here (expected ${describePattern(pattern)})');
+    }
+    return s;
+  }
+
+  String? optionalPath() {
+    if (!isPresent || isNull) return null;
+    final v = value;
+    if (v is! String) _fail('expected a path');
+    try {
+      return normalizeRelative(v);
+    } on FormatException catch (e) {
+      _fail(e.message);
+    }
+  }
+}
+
+class _Map {
+  _Map(this.map, this.path, this.allowed);
+
+  final YamlMap map;
+  final String path;
+  final Set<String> allowed;
+
+  void _checkKeys(_Node node) {
+    for (final key in map.keys) {
+      if (key is! String || !allowed.contains(key)) {
+        final where = path.isEmpty ? '' : '$path.';
+        throw SpecException(
+          '$specFileName: $where$key: unknown key '
+          '(allowed: ${(allowed.toList()..sort()).join(', ')})',
+        );
+      }
+    }
+  }
+
+  _Node child(String key) {
+    final full = path.isEmpty ? key : '$path.$key';
+    if (!map.containsKey(key)) return _Node(null, full, isPresent: false);
+    final v = map[key];
+    return _Node(v, full, isNull: v == null);
+  }
+}
